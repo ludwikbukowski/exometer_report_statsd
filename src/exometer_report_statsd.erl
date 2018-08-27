@@ -36,6 +36,7 @@
 -record(st, {socket  :: inet:socket(),
              address :: inet:ip_address(),
              port    :: inet:port_number(),
+             pod_ip :: list(),
              prefix  :: string(),
              type_map :: [{list(atom()), atom()}]}).
 
@@ -51,18 +52,19 @@ exometer_init(Opts) ->
     Port       = get_opt(port, Opts, ?DEFAULT_PORT),
     TypeMap    = get_opt(type_map, Opts, []),
     Prefix     = get_opt(prefix, Opts, []),
+    PodIP      = get_opt(pod_ip, Opts, []),
 
     case gen_udp:open(0, [AddrType]) of
     {ok, Sock} ->
         {ok, #st{socket=Sock, address=IP, port=Port, type_map=TypeMap,
-             prefix=Prefix}};
+             prefix=Prefix, pod_ip = PodIP}};
     {error, _} = Error ->
         Error
     end.
 
 
 exometer_report(Metric, DataPoint, Extra, Value, #st{type_map = TypeMap,
-                             prefix = Pfx} = St) ->
+                             prefix = Pfx, pod_ip = PodIP} = St) ->
     Key = metric_key(Metric, DataPoint),
     Name = name(Pfx, Metric, DataPoint),
     ?log(debug, "Report metric ~p = ~p~n", [Name, Value]),
@@ -70,7 +72,7 @@ exometer_report(Metric, DataPoint, Extra, Value, #st{type_map = TypeMap,
                {ok, T} -> T;
                error -> gauge
            end,
-    Line = [Name, ":", value(Value), "|", type(Type)],
+    Line = [Name, ":", value(Value), "|", type(Type)] ++ maybe_add_tags([{"pod_ip", PodIP}]),
     case gen_udp:send(St#st.socket, St#st.address, St#st.port, Line) of
         ok ->
             {ok, St};
@@ -78,6 +80,13 @@ exometer_report(Metric, DataPoint, Extra, Value, #st{type_map = TypeMap,
             ?log(warning, "Unable to write metric. ~p~n", [Reason]),
             {ok, St}
     end.
+
+maybe_add_tags([]) ->
+    [];
+maybe_add_tags([{T1, V1} | Tail]) ->
+    First = "#" ++ T1 ++":"++V1,
+    "|" ++ First ++ [","++T++":"++V || {T,V} <- Tail].
+
 
 exometer_subscribe(_Metric, _DataPoint, _Extra, _Interval, St) ->
     {ok, St}.
